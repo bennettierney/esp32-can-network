@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+  <title>Wiring of node A, node B and the laptop</title>
+  <rect x="0" y="0" width="960" height="600" rx="12" fill="#ffffff"/>
+
+  <!-- Node groupings -->
+  <rect x="24" y="36" width="380" height="484" rx="10" fill="none" stroke="#c3c2b7" stroke-dasharray="6 4"/>
+  <text x="40" y="58" font-size="13" font-weight="600" fill="#52514e">Node A: sensor ECU</text>
+  <rect x="556" y="196" width="380" height="324" rx="10" fill="none" stroke="#c3c2b7" stroke-dasharray="6 4"/>
+  <text x="572" y="218" font-size="13" font-weight="600" fill="#52514e">Node B: gateway ECU</text>
+
+  <!-- Links (drawn first so boxes sit on top) -->
+  <!-- ESP32 A to BME280 -->
+  <line x1="150" y1="148" x2="150" y2="232" stroke="#2a78d6" stroke-width="2"/>
+  <text x="162" y="166" font-size="12" fill="#0b0b0b">I2C, 100 kHz, address 0x77</text>
+  <text x="162" y="182" font-size="12" fill="#52514e">3V3 to VIN, GND to GND</text>
+  <text x="162" y="198" font-size="12" fill="#52514e">GPIO 8 to SDI (SDA)</text>
+  <text x="162" y="214" font-size="12" fill="#52514e">GPIO 9 to SCK (SCL)</text>
+
+  <!-- ESP32 A to CAN Pal A -->
+  <line x1="150" y1="322" x2="150" y2="412" stroke="#2a78d6" stroke-width="2"/>
+  <text x="162" y="342" font-size="12" fill="#0b0b0b">CAN logic, 3.3 V</text>
+  <text x="162" y="358" font-size="12" fill="#52514e">3V3 to Vcc, GND to GND</text>
+  <text x="162" y="374" font-size="12" fill="#52514e">GPIO 4 to TX, GPIO 5 to RX</text>
+  <text x="162" y="390" font-size="12" fill="#52514e">(TX to TX, not crossed)</text>
+
+  <!-- ESP32 B to CAN Pal B -->
+  <line x1="746" y1="322" x2="746" y2="412" stroke="#2a78d6" stroke-width="2"/>
+  <text x="758" y="342" font-size="12" fill="#0b0b0b">CAN logic, 3.3 V</text>
+  <text x="758" y="358" font-size="12" fill="#52514e">3V3 to Vcc, GND to GND</text>
+  <text x="758" y="374" font-size="12" fill="#52514e">GPIO 4 to TX</text>
+  <text x="758" y="390" font-size="12" fill="#52514e">GPIO 5 to RX</text>
+
+  <!-- CAN bus between the transceivers -->
+  <line x1="260" y1="436" x2="596" y2="436" stroke="#4a3aa7" stroke-width="2.5"/>
+  <line x1="260" y1="462" x2="596" y2="462" stroke="#eb6834" stroke-width="2.5"/>
+  <text x="300" y="428" font-size="12" font-weight="600" fill="#0b0b0b">CANH</text>
+  <text x="300" y="480" font-size="12" font-weight="600" fill="#0b0b0b">CANL</text>
+  <text x="480" y="453" font-size="12" text-anchor="middle" fill="#0b0b0b">CAN bus, 500 kbps</text>
+  <text x="480" y="556" font-size="12" text-anchor="middle" fill="#52514e">CAN bus: 120 Ω termination switched ON at both ends; ground shared through the laptop's USB</text>
+
+  <!-- BLE from node B to the laptop -->
+  <line x1="746" y1="232" x2="746" y2="150" stroke="#1baf7a" stroke-width="2" stroke-dasharray="7 5"/>
+  <line x1="746" y1="150" x2="682" y2="150" stroke="#1baf7a" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="758" y="164" font-size="12" font-weight="600" fill="#0b0b0b">BLE, GATT notify</text>
+  <text x="758" y="180" font-size="12" fill="#52514e">readings + node A status</text>
+
+  <!-- Boxes -->
+  <rect x="50" y="78" width="200" height="70" rx="8" fill="#fcfcfb" stroke="#52514e"/>
+  <text x="150" y="108" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">BME280</text>
+  <text x="150" y="128" font-size="12" text-anchor="middle" fill="#52514e">temperature, humidity, pressure</text>
+
+  <rect x="50" y="232" width="200" height="90" rx="8" fill="#fcfcfb" stroke="#52514e"/>
+  <text x="150" y="266" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">ESP32-S3 DevKitC-1</text>
+  <text x="150" y="286" font-size="12" text-anchor="middle" fill="#52514e">node A</text>
+  <text x="150" y="304" font-size="12" text-anchor="middle" fill="#52514e">FreeRTOS, TWAI controller</text>
+
+  <rect x="50" y="412" width="210" height="70" rx="8" fill="#fcfcfb" stroke="#52514e"/>
+  <text x="155" y="442" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">CAN Pal</text>
+  <text x="155" y="462" font-size="12" text-anchor="middle" fill="#52514e">TJA1051 transceiver</text>
+
+  <rect x="596" y="412" width="210" height="70" rx="8" fill="#fcfcfb" stroke="#52514e"/>
+  <text x="701" y="442" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">CAN Pal</text>
+  <text x="701" y="462" font-size="12" text-anchor="middle" fill="#52514e">TJA1051 transceiver</text>
+
+  <rect x="646" y="232" width="200" height="90" rx="8" fill="#fcfcfb" stroke="#52514e"/>
+  <text x="746" y="266" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">ESP32-S3 DevKitC-1</text>
+  <text x="746" y="286" font-size="12" text-anchor="middle" fill="#52514e">node B</text>
+  <text x="746" y="304" font-size="12" text-anchor="middle" fill="#52514e">TWAI controller, NimBLE</text>
+
+  <rect x="482" y="78" width="200" height="90" rx="8" fill="#fcfcfb" stroke="#52514e"/>
+  <text x="582" y="108" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">Laptop</text>
+  <text x="582" y="128" font-size="12" text-anchor="middle" fill="#52514e">gateway.py (bleak)</text>
+  <text x="582" y="144" font-size="12" text-anchor="middle" fill="#52514e">FastAPI, Postgres, React</text>
+  <text x="582" y="160" font-size="11" text-anchor="middle" fill="#898781">both boards on USB for power and logs</text>
+</svg>
