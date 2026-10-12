@@ -1,6 +1,8 @@
 #pragma once
 
-// CAN frame layout for one environment reading.
+// CAN frame layouts shared by node A (sender) and node B (receiver).
+//
+// Environment reading:
 //
 // Standard 11 bit ID, 8 byte payload, little endian (low byte first):
 //   bytes 0 to 1   temperature   int16    0.01 C
@@ -11,7 +13,13 @@
 // on the wire does not depend on the compiler or the CPU.
 
 #include <stdint.h>
-#include "bme280.h"
+
+// One environment reading in the units carried on the wire.
+struct EnvReading {
+    int32_t  temp_c100;  // temperature in 0.01 C
+    uint32_t press_pa;   // pressure in Pa
+    uint32_t hum_c100;   // relative humidity in 0.01 %
+};
 
 static constexpr uint32_t CAN_ID_ENV_READING = 0x100;
 
@@ -30,7 +38,7 @@ struct CanFrame {
 };
 
 // Caller must range check first: temperature has to fit in int16 and humidity in uint16.
-inline CanFrame can_pack_reading(const BmeReading &r)
+inline CanFrame can_pack_reading(const EnvReading &r)
 {
     CanFrame f = {};
     f.id = CAN_ID_ENV_READING;
@@ -51,10 +59,10 @@ inline CanFrame can_pack_reading(const BmeReading &r)
     return f;
 }
 
-// Inverse of can_pack_reading. Node B will use the same function to decode.
-inline BmeReading can_unpack_reading(const CanFrame &f)
+// Inverse of can_pack_reading. Node B uses this to decode what node A sends.
+inline EnvReading can_unpack_reading(const CanFrame &f)
 {
-    BmeReading r = {};
+    EnvReading r = {};
     r.temp_c100 = (int16_t)(f.data[0] | f.data[1] << 8);
     r.hum_c100 = (uint16_t)(f.data[2] | f.data[3] << 8);
     r.press_pa = (uint32_t)f.data[4] | (uint32_t)f.data[5] << 8 |
@@ -73,4 +81,18 @@ inline CanFrame can_pack_heartbeat(uint32_t uptime_s, bool sensor_ok)
     f.data[3] = (uptime_s >> 24) & 0xFF;
     f.data[4] = sensor_ok ? 1 : 0;
     return f;
+}
+
+struct Heartbeat {
+    uint32_t uptime_s;
+    bool sensor_ok;
+};
+
+inline Heartbeat can_unpack_heartbeat(const CanFrame &f)
+{
+    Heartbeat h = {};
+    h.uptime_s = (uint32_t)f.data[0] | (uint32_t)f.data[1] << 8 |
+                 (uint32_t)f.data[2] << 16 | (uint32_t)f.data[3] << 24;
+    h.sensor_ok = f.data[4] != 0;
+    return h;
 }

@@ -36,7 +36,7 @@ static constexpr int MAX_CONSECUTIVE_FAILURES = 3;
 // Self test: CAN frames go out without needing an acknowledgment from another node, so
 // node A can check its own transceiver wiring alone. Set to false once node B is on the bus,
 // so a missing receiver shows up as an error.
-static constexpr bool CAN_SELF_TEST = true;
+static constexpr bool CAN_SELF_TEST = false;
 
 // Each queue holds 8 items, about 8 seconds of readings. Enough to ride out a brief
 // stall downstream without growing memory use.
@@ -224,7 +224,8 @@ static void processing_task(void *arg)
             continue;
         }
 
-        Outgoing out = {s.seq, s.on_demand, can_pack_reading(s.reading)};
+        EnvReading env = {s.reading.temp_c100, s.reading.press_pa, s.reading.hum_c100};
+        Outgoing out = {s.seq, s.on_demand, can_pack_reading(env)};
         send_latest(s_frame_queue, out, "frame");
     }
 }
@@ -251,7 +252,7 @@ static void send_reading(const Outgoing &out)
 
     // Log the frame, and decode it back to prove the packing round trips.
     const uint8_t *d = out.frame.data;
-    BmeReading r = can_unpack_reading(out.frame);
+    EnvReading r = can_unpack_reading(out.frame);
     ESP_LOGI(TAG, "TX id=0x%03" PRIX32 " seq=%" PRIu32 "%s [%02X %02X %02X %02X %02X %02X %02X %02X]"
                   "  T=%" PRId32 ".%02" PRId32 " C  H=%" PRIu32 ".%02" PRIu32 " %%  P=%" PRIu32 " Pa  can=%s",
              out.frame.id, out.seq, out.on_demand ? " (button)" : "",
