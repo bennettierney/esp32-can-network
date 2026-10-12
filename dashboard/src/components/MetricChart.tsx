@@ -67,7 +67,9 @@ export function MetricChart({ title, unit, decimals, points, domain }: Props) {
             <YAxis
               dataKey="v"
               domain={["auto", "auto"]}
-              tickFormatter={(v: number) => v.toFixed(decimals === 0 ? 0 : 1)}
+              // Same precision as the values: readings vary by hundredths, so rounding ticks
+              // to fewer places makes neighbouring ticks show the same label.
+              tickFormatter={(v: number) => v.toFixed(decimals)}
               tick={{ fill: "var(--text-muted)", fontSize: 11 }}
               axisLine={false}
               tickLine={false}
