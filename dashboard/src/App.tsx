@@ -11,12 +11,13 @@ interface Metric {
   title: string;
   unit: string;
   decimals: number;
+  minSpan: number; // smallest y range on the chart
 }
 
 const METRICS: Metric[] = [
-  { key: "temperature_c", title: "Temperature", unit: "°C", decimals: 2 },
-  { key: "humidity_pct", title: "Humidity", unit: "%", decimals: 2 },
-  { key: "pressure_pa", title: "Pressure", unit: "Pa", decimals: 0 },
+  { key: "temperature_c", title: "Temperature", unit: "°C", decimals: 2, minSpan: 0.5 },
+  { key: "humidity_pct", title: "Humidity", unit: "%", decimals: 2, minSpan: 1 },
+  { key: "pressure_pa", title: "Pressure", unit: "Pa", decimals: 0, minSpan: 50 },
 ];
 
 function StatTile({ label, value, detail }: { label: string; value: string; detail: string }) {
@@ -106,6 +107,7 @@ export default function App() {
                 title={m.title}
                 unit={m.unit}
                 decimals={m.decimals}
+                minSpan={m.minSpan}
                 points={series(m.key)}
                 domain={[start, now]}
               />

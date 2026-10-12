@@ -20,6 +20,8 @@ BME280 ─I2C─▶ node A ─CAN─▶ node B ─BLE─▶ gateway.py ─HTTP�
 Firmware is C++ (C for the BLE module) on ESP-IDF 5.5. The hardware is premade modules
 wired on breadboards.
 
+![Dashboard showing live temperature, humidity and pressure with node health badges](docs/dashboard.png)
+
 ## Hardware
 
 | Part | Role |
@@ -120,4 +122,4 @@ bus.
 ## Status
 
 Working end to end. Outstanding: a decoded logic analyzer capture of the I2C traffic
-(the clone analyzer used so far interferes with the bus), and a dashboard screenshot.
+(the clone analyzer used so far interferes with the bus).
