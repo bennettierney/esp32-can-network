@@ -1,0 +1,22 @@
+# Local development database for the telemetry backend.
+# Start it with: docker compose up -d
+services:
+  db:
+    image: postgres:16
+    environment:
+      # Local development only. Not a real secret.
+      POSTGRES_USER: telemetry
+      POSTGRES_PASSWORD: telemetry
+      POSTGRES_DB: telemetry
+    ports:
+      - "5433:5432"  # 5433 on the host, so it does not clash with another local Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  pgdata:
