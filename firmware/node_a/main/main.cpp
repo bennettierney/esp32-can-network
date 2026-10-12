@@ -26,6 +26,12 @@ static constexpr int I2C_TIMEOUT_MS = 100;
 // Device handle for the sensor. Set once in app_main, used by the helpers.
 static i2c_master_dev_handle_t s_dev;
 
+// Bus handle, kept so the main loop can reset the bus if it gets stuck.
+static i2c_master_bus_handle_t s_bus;
+
+// After this many failed reads in a row, reset the bus and re-initialize the sensor.
+static constexpr int MAX_CONSECUTIVE_FAILURES = 3;
+
 // ---------------------------------------------------------------------------
 // Register access helpers. Every other function calls these.
 // ---------------------------------------------------------------------------
@@ -313,9 +319,9 @@ static uint32_t bme_compensate_humidity(int32_t adc_H)
     return (q22_10 * 100) >> 10;
 }
 
-extern "C" void app_main(void)
+// Create the I2C bus (SDA on GPIO 8, SCL on GPIO 9) and register the sensor on it.
+static esp_err_t i2c_setup()
 {
-    // Create the I2C bus: the two wires, SDA (GPIO 8) and SCL (GPIO 9).
     i2c_master_bus_config_t cfg = {};
     cfg.i2c_port = I2C_NUM_0;
     cfg.sda_io_num = GPIO_NUM_8;
@@ -324,40 +330,87 @@ extern "C" void app_main(void)
     cfg.glitch_ignore_cnt = 7;                  // ignore pulses shorter than 7 cycles
     cfg.flags.enable_internal_pullup = true;    // the breakout has its own as well
 
-    i2c_master_bus_handle_t bus;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&cfg, &bus));
-
-    // Probe every legal 7 bit address and log which ones ACK.
-    int found = 0;
-    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
-        if (i2c_master_probe(bus, addr, 50) == ESP_OK) {
-            ESP_LOGI(TAG, "found device at 0x%02X", addr);
-            found++;
-        }
+    esp_err_t err = i2c_new_master_bus(&cfg, &s_bus);
+    if (err != ESP_OK) {
+        return err;
     }
-    ESP_LOGI(TAG, "scan done, %d device(s)", found);
 
     // Describe the sensor as a device on the bus: address, address size, clock speed.
     i2c_device_config_t device_config = {};
     device_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     device_config.device_address = BME_ADDR;
     device_config.scl_speed_hz = 100000;
+    return i2c_master_bus_add_device(s_bus, &device_config, &s_dev);
+}
 
-    // Register it on the bus. This gives us the handle used for all later transfers.
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus, &device_config, &s_dev));
+// Recover from a stuck bus. i2c_master_bus_reset alone clears the bus lines, but the
+// driver can stay in an error state where every transfer fails. Tearing the bus down
+// and creating it again is the software equivalent of a reboot, scoped to I2C.
+static esp_err_t i2c_recover()
+{
+    i2c_master_bus_reset(s_bus);       // clock out any half finished transfer first
+    i2c_master_bus_rm_device(s_dev);
+    i2c_del_master_bus(s_bus);
+    return i2c_setup();
+}
 
-    // Bring the sensor up: verify the chip, reset it, load calibration, start measuring.
-    if (!bme_check_id()) { ESP_LOGE(TAG, "not a BME280"); return; }
-    ESP_ERROR_CHECK(bme_reset());
-    ESP_ERROR_CHECK(bme_read_calibration());
-    ESP_ERROR_CHECK(bme_configure());
+// Full sensor bring-up: verify the chip, reset it, load calibration, start measuring.
+// Used at boot and again after a bus recovery, since a glitch can leave the sensor
+// in an unknown state.
+static esp_err_t bme_init()
+{
+    if (!bme_check_id()) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    esp_err_t err = bme_reset();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = bme_read_calibration();
+    if (err != ESP_OK) {
+        return err;
+    }
+    return bme_configure();
+}
+
+extern "C" void app_main(void)
+{
+    ESP_ERROR_CHECK(i2c_setup());
+
+    // Probe every legal 7 bit address and log which ones ACK.
+    int found = 0;
+    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+        if (i2c_master_probe(s_bus, addr, 50) == ESP_OK) {
+            ESP_LOGI(TAG, "found device at 0x%02X", addr);
+            found++;
+        }
+    }
+    ESP_LOGI(TAG, "scan done, %d device(s)", found);
+
+    bool ready = false;  // true once bme_init has succeeded
+    int failures = 0;    // consecutive failed reads
 
     while (true) {
+        // Bring the sensor up, at boot or after a recovery. Keep retrying instead of
+        // giving up, so a loose wire or a glitch at power on is not fatal.
+        if (!ready) {
+            esp_err_t err = bme_init();
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "sensor ready");
+                ready = true;
+                failures = 0;
+            } else {
+                ESP_LOGW(TAG, "sensor init failed: %s, recovering I2C bus", esp_err_to_name(err));
+                i2c_recover();
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+        }
+
         int32_t adc_T, adc_P, adc_H;
         esp_err_t err = bme_read_raw(&adc_T, &adc_P, &adc_H);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "raw read failed: %s", esp_err_to_name(err));
-        } else {
+        if (err == ESP_OK) {
+            failures = 0;
             // Temperature first: it sets s_t_fine, which the other two use.
             int32_t temp_c100 = bme_compensate_temp(adc_T);
             uint32_t press_pa = bme_compensate_pressure(adc_P);
@@ -366,6 +419,19 @@ extern "C" void app_main(void)
                      temp_c100 / 100, temp_c100 % 100,
                      press_pa,
                      hum_c100 / 100, hum_c100 % 100);
+        } else if (err == ESP_ERR_NOT_FINISHED) {
+            // First measurement after configure is not ready yet. Not a bus problem.
+            ESP_LOGD(TAG, "measurement not ready yet");
+        } else {
+            failures++;
+            ESP_LOGE(TAG, "raw read failed (%d in a row): %s", failures, esp_err_to_name(err));
+            if (failures >= MAX_CONSECUTIVE_FAILURES) {
+                // The bus or the I2C controller is stuck, for example after a glitch on
+                // SDA or SCL mid transfer. Reset the bus, then re-initialize the sensor.
+                ESP_LOGW(TAG, "recovering I2C bus after %d failures", failures);
+                i2c_recover();
+                ready = false;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
