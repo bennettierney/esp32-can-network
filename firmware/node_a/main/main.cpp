@@ -9,9 +9,10 @@
 // sensor_task      owns the I2C bus and the BME280. Samples once a second, or right away
 //                  when the button is pressed. Handles bus recovery.
 // processing_task  range checks each reading and packs it into the 8 byte CAN layout.
-// comms_task       publishes frames over BLE (ble_env) and logs them. In week 8 it also
-//                  drives the CAN bus.
+// comms_task       sends each frame on the CAN bus (can_bus), publishes it over BLE
+//                  (ble_env), and logs it. Also sends a CAN heartbeat every second.
 
+#include <atomic>
 #include <inttypes.h>
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -21,6 +22,7 @@
 #include "freertos/task.h"
 #include "ble_env.h"
 #include "bme280.h"
+#include "can_bus.h"
 #include "can_frame.h"
 
 static const char *TAG = "node_a";
@@ -30,6 +32,11 @@ static const char *TAG = "node_a";
 // ---------------------------------------------------------------------------
 static constexpr TickType_t SAMPLE_PERIOD = pdMS_TO_TICKS(1000);
 static constexpr int MAX_CONSECUTIVE_FAILURES = 3;
+
+// Self test: CAN frames go out without needing an acknowledgment from another node, so
+// node A can check its own transceiver wiring alone. Set to false once node B is on the bus,
+// so a missing receiver shows up as an error.
+static constexpr bool CAN_SELF_TEST = true;
 
 // Each queue holds 8 items, about 8 seconds of readings. Enough to ride out a brief
 // stall downstream without growing memory use.
@@ -45,6 +52,8 @@ static constexpr uint32_t STACK_BYTES = 4096;  // ESP-IDF measures task stacks i
 // BOOT button: GPIO 0, pulled up, reads low while pressed.
 static constexpr gpio_num_t BUTTON_GPIO = GPIO_NUM_0;
 static constexpr int64_t DEBOUNCE_US = 200 * 1000;
+
+static constexpr TickType_t HEARTBEAT_PERIOD = pdMS_TO_TICKS(1000);
 
 // ---------------------------------------------------------------------------
 // Messages passed between tasks. Queues copy these by value.
@@ -64,6 +73,10 @@ struct Outgoing {
 static QueueHandle_t s_sample_queue;
 static QueueHandle_t s_frame_queue;
 static TaskHandle_t s_sensor_task;  // the button ISR needs this to notify the task
+
+// Set by the sensor task, read by the comms task for the heartbeat. Atomic because two
+// tasks touch it.
+static std::atomic<bool> s_sensor_ok{false};
 
 // Send without blocking. If the queue is full, drop the oldest item to make room:
 // for telemetry, a fresh reading is worth more than a stale one, and the producer
@@ -155,6 +168,7 @@ static void sensor_task(void *arg)
             esp_err_t err = bme280_init();
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "sensor init failed: %s, recovering I2C bus", esp_err_to_name(err));
+                s_sensor_ok = false;
                 bme280_recover();
                 continue;
             }
@@ -167,6 +181,7 @@ static void sensor_task(void *arg)
         esp_err_t err = bme280_read(&r);
         if (err == ESP_OK) {
             failures = 0;
+            s_sensor_ok = true;
             Sample s = {seq++, on_demand, r};
             send_latest(s_sample_queue, s, "sample");
         } else if (err == ESP_ERR_NOT_FINISHED) {
@@ -174,6 +189,7 @@ static void sensor_task(void *arg)
             ESP_LOGD(TAG, "measurement not ready yet");
         } else {
             failures++;
+            s_sensor_ok = false;
             ESP_LOGE(TAG, "read failed (%d in a row): %s", failures, esp_err_to_name(err));
             if (failures >= MAX_CONSECUTIVE_FAILURES) {
                 // The bus or the I2C controller is stuck, for example after a glitch on
@@ -213,25 +229,59 @@ static void processing_task(void *arg)
     }
 }
 
+static void send_heartbeat()
+{
+    uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+    bool sensor_ok = s_sensor_ok;
+    CanFrame hb = can_pack_heartbeat(uptime_s, sensor_ok);
+    esp_err_t err = can_bus_send(hb.id, hb.data, hb.len);
+    ESP_LOGI(TAG, "HB id=0x%03" PRIX32 " uptime=%" PRIu32 "s sensor=%s can=%s",
+             hb.id, uptime_s, sensor_ok ? "ok" : "down", esp_err_to_name(err));
+
+    // Every 10 heartbeats, report the CAN controller's health: state and error counters.
+    if (uptime_s % 10 == 0) {
+        can_bus_log_status();
+    }
+}
+
+static void send_reading(const Outgoing &out)
+{
+    esp_err_t can_err = can_bus_send(out.frame.id, out.frame.data, out.frame.len);
+    ble_env_publish(out.frame.data);  // BLE carries the same 8 bytes as the CAN frame
+
+    // Log the frame, and decode it back to prove the packing round trips.
+    const uint8_t *d = out.frame.data;
+    BmeReading r = can_unpack_reading(out.frame);
+    ESP_LOGI(TAG, "TX id=0x%03" PRIX32 " seq=%" PRIu32 "%s [%02X %02X %02X %02X %02X %02X %02X %02X]"
+                  "  T=%" PRId32 ".%02" PRId32 " C  H=%" PRIu32 ".%02" PRIu32 " %%  P=%" PRIu32 " Pa  can=%s",
+             out.frame.id, out.seq, out.on_demand ? " (button)" : "",
+             d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+             r.temp_c100 / 100, r.temp_c100 % 100,
+             r.hum_c100 / 100, r.hum_c100 % 100,
+             r.press_pa, esp_err_to_name(can_err));
+}
+
 static void comms_task(void *arg)
 {
-    Outgoing out;
+    TickType_t next_heartbeat = xTaskGetTickCount() + HEARTBEAT_PERIOD;
     while (true) {
-        xQueueReceive(s_frame_queue, &out, portMAX_DELAY);
+        // Wait for a reading, but no longer than until the next heartbeat is due, so
+        // heartbeats keep going even when the sensor produces nothing.
+        int32_t remaining = (int32_t)(next_heartbeat - xTaskGetTickCount());
+        TickType_t wait = remaining > 0 ? (TickType_t)remaining : 0;
 
-        // BLE gets the same 8 bytes that will go on the CAN bus in week 8.
-        ble_env_publish(out.frame.data);
+        Outgoing out;
+        if (xQueueReceive(s_frame_queue, &out, wait) == pdTRUE) {
+            send_reading(out);
+        }
 
-        // Log the frame, and decode it back to prove the packing round trips.
-        const uint8_t *d = out.frame.data;
-        BmeReading r = can_unpack_reading(out.frame);
-        ESP_LOGI(TAG, "TX id=0x%03" PRIX32 " seq=%" PRIu32 "%s [%02X %02X %02X %02X %02X %02X %02X %02X]"
-                      "  T=%" PRId32 ".%02" PRId32 " C  H=%" PRIu32 ".%02" PRIu32 " %%  P=%" PRIu32 " Pa",
-                 out.frame.id, out.seq, out.on_demand ? " (button)" : "",
-                 d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
-                 r.temp_c100 / 100, r.temp_c100 % 100,
-                 r.hum_c100 / 100, r.hum_c100 % 100,
-                 r.press_pa);
+        if ((int32_t)(next_heartbeat - xTaskGetTickCount()) <= 0) {
+            send_heartbeat();
+            next_heartbeat += HEARTBEAT_PERIOD;
+            if ((int32_t)(next_heartbeat - xTaskGetTickCount()) <= 0) {
+                next_heartbeat = xTaskGetTickCount() + HEARTBEAT_PERIOD;  // fell behind, resync
+            }
+        }
     }
 }
 
@@ -250,6 +300,7 @@ static void start_task(TaskFunction_t fn, const char *name, UBaseType_t prio, Ta
 extern "C" void app_main(void)
 {
     ESP_ERROR_CHECK(ble_env_init());
+    ESP_ERROR_CHECK(can_bus_init(CAN_SELF_TEST));
 
     s_sample_queue = xQueueCreate(QUEUE_LENGTH, sizeof(Sample));
     s_frame_queue = xQueueCreate(QUEUE_LENGTH, sizeof(Outgoing));

@@ -15,6 +15,14 @@
 
 static constexpr uint32_t CAN_ID_ENV_READING = 0x100;
 
+// Heartbeat, sent once a second whether or not the sensor works, so receivers can tell
+// "node A is down" apart from "node A is up but its sensor failed".
+// ID 0x700 + node number follows the CANopen convention for heartbeats.
+//   bytes 0 to 3   uptime        uint32   seconds since boot
+//   byte  4        sensor_ok     uint8    1 if the last sensor read succeeded, else 0
+//   bytes 5 to 7   reserved, 0
+static constexpr uint32_t CAN_ID_HEARTBEAT_NODE_A = 0x701;
+
 struct CanFrame {
     uint32_t id;       // 11 bit identifier
     uint8_t  len;      // payload length in bytes, 0 to 8
@@ -52,4 +60,17 @@ inline BmeReading can_unpack_reading(const CanFrame &f)
     r.press_pa = (uint32_t)f.data[4] | (uint32_t)f.data[5] << 8 |
                  (uint32_t)f.data[6] << 16 | (uint32_t)f.data[7] << 24;
     return r;
+}
+
+inline CanFrame can_pack_heartbeat(uint32_t uptime_s, bool sensor_ok)
+{
+    CanFrame f = {};
+    f.id = CAN_ID_HEARTBEAT_NODE_A;
+    f.len = 8;
+    f.data[0] = uptime_s & 0xFF;
+    f.data[1] = (uptime_s >> 8) & 0xFF;
+    f.data[2] = (uptime_s >> 16) & 0xFF;
+    f.data[3] = (uptime_s >> 24) & 0xFF;
+    f.data[4] = sensor_ok ? 1 : 0;
+    return f;
 }
