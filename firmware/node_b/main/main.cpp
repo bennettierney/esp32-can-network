@@ -1,9 +1,10 @@
 // Node B: gateway node.
 //
-// Receives CAN frames from node A, decodes them, and tracks node A's health from its
-// heartbeat. Next step: forward the readings over BLE.
+// Receives CAN frames from node A, decodes them, tracks node A's health from its
+// heartbeat, and forwards readings and status over BLE (ble_env).
 //
-//   TWAI receive interrupt ──CanFrame──▶ [rx queue] ──▶ rx_task (decode, log, health check)
+//   TWAI receive interrupt ──CanFrame──▶ [rx queue] ──▶ rx_task ──▶ BLE notify
+//                                                      (decode, log, health check)
 //
 // Wiring: GPIO 4 to CAN Pal TX, GPIO 5 to CAN Pal RX (TX to TX, RX to RX). 500 kbps.
 
@@ -16,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "ble_env.h"
 #include "can_frame.h"
 
 static const char *TAG = "node_b";
@@ -105,6 +107,19 @@ static esp_err_t can_init()
     return err;
 }
 
+// Build the 9 byte BLE status value. Layout documented in ble_env.h.
+static void publish_status(bool node_a_online, bool sensor_ok, uint32_t node_a_uptime_s)
+{
+    uint8_t p[BLE_ENV_STATUS_LEN] = {};
+    p[0] = (node_a_online ? 0x01 : 0) | (sensor_ok ? 0x02 : 0);
+    uint32_t errors = s_bus_errors.load();
+    for (int i = 0; i < 4; i++) {
+        p[1 + i] = (node_a_uptime_s >> (8 * i)) & 0xFF;
+        p[5 + i] = (errors >> (8 * i)) & 0xFF;
+    }
+    ble_env_publish_status(p);
+}
+
 // ---------------------------------------------------------------------------
 // Receive task
 // ---------------------------------------------------------------------------
@@ -113,6 +128,7 @@ static void rx_task(void *arg)
 {
     bool node_a_online = false;
     bool sensor_ok = false;
+    uint32_t node_a_uptime_s = 0;
     TickType_t last_heartbeat = 0;
     uint32_t readings = 0, heartbeats = 0, unknown = 0;
     TickType_t next_status = xTaskGetTickCount() + STATUS_PERIOD;
@@ -128,6 +144,7 @@ static void rx_task(void *arg)
                               " %%  P=%" PRIu32 " Pa",
                          f.id, r.temp_c100 / 100, r.temp_c100 % 100, r.hum_c100 / 100, r.hum_c100 % 100,
                          r.press_pa);
+                ble_env_publish_reading(f.data);  // same 8 bytes, passed straight through
             } else if (f.id == CAN_ID_HEARTBEAT_NODE_A && f.len == 8) {
                 heartbeats++;
                 last_heartbeat = xTaskGetTickCount();
@@ -140,6 +157,8 @@ static void rx_task(void *arg)
                     ESP_LOGI(TAG, "node A sensor %s", h.sensor_ok ? "ok" : "DOWN");
                     sensor_ok = h.sensor_ok;
                 }
+                node_a_uptime_s = h.uptime_s;
+                publish_status(node_a_online, sensor_ok, node_a_uptime_s);
             } else {
                 unknown++;
                 ESP_LOGW(TAG, "unexpected frame id=0x%03" PRIX32 " len=%u", f.id, f.len);
@@ -150,6 +169,7 @@ static void rx_task(void *arg)
         if (node_a_online && xTaskGetTickCount() - last_heartbeat > HEARTBEAT_TIMEOUT) {
             ESP_LOGW(TAG, "node A OFFLINE: no heartbeat for %" PRIu32 " ms", (uint32_t)pdTICKS_TO_MS(HEARTBEAT_TIMEOUT));
             node_a_online = false;
+            publish_status(node_a_online, sensor_ok, node_a_uptime_s);  // tell BLE clients right away
         }
 
         if ((int32_t)(xTaskGetTickCount() - next_status) >= 0) {
@@ -172,6 +192,7 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG, "failed to create rx queue");
         abort();
     }
+    ESP_ERROR_CHECK(ble_env_init());
     ESP_ERROR_CHECK(can_init());
     if (xTaskCreate(rx_task, "rx", 4096, nullptr, 5, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "failed to start rx task");

@@ -9,8 +9,8 @@
 // sensor_task      owns the I2C bus and the BME280. Samples once a second, or right away
 //                  when the button is pressed. Handles bus recovery.
 // processing_task  range checks each reading and packs it into the 8 byte CAN layout.
-// comms_task       sends each frame on the CAN bus (can_bus), publishes it over BLE
-//                  (ble_env), and logs it. Also sends a CAN heartbeat every second.
+// comms_task       sends each frame on the CAN bus (can_bus) and logs it. Also sends a
+//                  CAN heartbeat every second. Node B forwards both over BLE.
 
 #include <atomic>
 #include <inttypes.h>
@@ -20,7 +20,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "ble_env.h"
 #include "bme280.h"
 #include "can_bus.h"
 #include "can_frame.h"
@@ -248,7 +247,6 @@ static void send_heartbeat()
 static void send_reading(const Outgoing &out)
 {
     esp_err_t can_err = can_bus_send(out.frame.id, out.frame.data, out.frame.len);
-    ble_env_publish(out.frame.data);  // BLE carries the same 8 bytes as the CAN frame
 
     // Log the frame, and decode it back to prove the packing round trips.
     const uint8_t *d = out.frame.data;
@@ -300,7 +298,6 @@ static void start_task(TaskFunction_t fn, const char *name, UBaseType_t prio, Ta
 
 extern "C" void app_main(void)
 {
-    ESP_ERROR_CHECK(ble_env_init());
     ESP_ERROR_CHECK(can_bus_init(CAN_SELF_TEST));
 
     s_sample_queue = xQueueCreate(QUEUE_LENGTH, sizeof(Sample));

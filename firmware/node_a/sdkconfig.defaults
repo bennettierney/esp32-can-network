@@ -1,8 +1,1 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-
-# Bluetooth: BLE only, NimBLE host (smaller than Bluedroid)
-CONFIG_BT_ENABLED=y
-CONFIG_BT_NIMBLE_ENABLED=y
-
-# The BLE stack makes the app bigger than the default 1MB partition
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
