@@ -1,3 +1,3 @@
-idf_component_register(SRCS "main.cpp" "bme280.cpp"
-                       PRIV_REQUIRES esp_driver_i2c esp_driver_gpio esp_timer
+idf_component_register(SRCS "main.cpp" "bme280.cpp" "ble_env.c"
+                       PRIV_REQUIRES esp_driver_i2c esp_driver_gpio esp_timer bt nvs_flash
                        INCLUDE_DIRS "")

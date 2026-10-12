@@ -9,7 +9,8 @@
 // sensor_task      owns the I2C bus and the BME280. Samples once a second, or right away
 //                  when the button is pressed. Handles bus recovery.
 // processing_task  range checks each reading and packs it into the 8 byte CAN layout.
-// comms_task       sends frames. For now it logs them; in week 8 it drives the CAN bus.
+// comms_task       publishes frames over BLE (ble_env) and logs them. In week 8 it also
+//                  drives the CAN bus.
 
 #include <inttypes.h>
 #include "driver/gpio.h"
@@ -18,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "ble_env.h"
 #include "bme280.h"
 #include "can_frame.h"
 
@@ -217,8 +219,10 @@ static void comms_task(void *arg)
     while (true) {
         xQueueReceive(s_frame_queue, &out, portMAX_DELAY);
 
-        // Week 8: send out.frame on the CAN bus with TWAI. For now, log it, and decode it
-        // back to prove the packing round trips.
+        // BLE gets the same 8 bytes that will go on the CAN bus in week 8.
+        ble_env_publish(out.frame.data);
+
+        // Log the frame, and decode it back to prove the packing round trips.
         const uint8_t *d = out.frame.data;
         BmeReading r = can_unpack_reading(out.frame);
         ESP_LOGI(TAG, "TX id=0x%03" PRIX32 " seq=%" PRIu32 "%s [%02X %02X %02X %02X %02X %02X %02X %02X]"
@@ -245,6 +249,8 @@ static void start_task(TaskFunction_t fn, const char *name, UBaseType_t prio, Ta
 
 extern "C" void app_main(void)
 {
+    ESP_ERROR_CHECK(ble_env_init());
+
     s_sample_queue = xQueueCreate(QUEUE_LENGTH, sizeof(Sample));
     s_frame_queue = xQueueCreate(QUEUE_LENGTH, sizeof(Outgoing));
     if (s_sample_queue == nullptr || s_frame_queue == nullptr) {
