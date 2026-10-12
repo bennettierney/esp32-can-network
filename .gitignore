@@ -7,3 +7,4 @@ __pycache__/
 .env
 managed_components/
 .vscode/
+.pytest_cache/
